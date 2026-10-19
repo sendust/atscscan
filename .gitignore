@@ -1,0 +1,8 @@
+# secrets and runtime data (never commit)
+config.json
+data/
+logs/
+capture/
+*.log
+__pycache__/
+*.pyc

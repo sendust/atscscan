@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SBS 헤드엔드 모니터 시스템</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">◉</span>
+    <span class="title" id="appTitle">SBS 헤드엔드 모니터 시스템</span>
+    <span class="sub" id="subtitle">SKYTV HD USB mini · /dev/dvb/adapter0</span>
+  </div>
+  <div class="top-right">
+    <button class="ghost alert-btn" id="btnAlerts" title="경보 목록">🔔 경보 <span id="alertCnt">0</span></button>
+    <button class="ghost" id="btnSched">⏰ 스케줄</button>
+    <button class="ghost" id="btnTrend">📈 RF 추이</button>
+    <button class="ghost" id="btnHome" hidden>← 모드 선택</button>
+  </div>
+</header>
+
+<main>
+  <div id="alertBanner" class="alert-banner" hidden></div>
+
+  <!-- alerts -->
+  <section id="alertPanel" class="saved mon" hidden>
+    <div class="saved-head">
+      <h3>경보 <span class="muted" id="alertSub"></span></h3>
+      <div class="saved-actions">
+        <select id="alertState">
+          <option value="active">해제되지 않은 경보</option>
+          <option value="all">전체 기록</option>
+        </select>
+        <button class="ghost mini" id="btnAckAll">모두 확인</button>
+        <span class="muted" id="tgStatus"></span>
+        <button class="ghost mini" id="btnTgTest">텔레그램 테스트</button>
+        <button class="ghost mini" data-close="alertPanel">닫기</button>
+      </div>
+    </div>
+    <div id="alertBody" class="saved-body"></div>
+  </section>
+
+  <!-- schedules -->
+  <section id="schedPanel" class="saved mon" hidden>
+    <div class="saved-head">
+      <h3>자동 스캔 스케줄 <span class="muted" id="schedSub"></span></h3>
+      <div class="saved-actions">
+        <button class="primary mini" id="btnSchedNew">+ 새 스케줄</button>
+        <button class="ghost mini" data-close="schedPanel">닫기</button>
+      </div>
+    </div>
+    <form id="schedForm" class="sched-form" hidden>
+      <div class="f-row">
+        <label>이름 <input id="sfName" placeholder="예: 매일 아침 점검" maxlength="40"></label>
+        <label>모드 <select id="sfMode"></select></label>
+        <label>CH 범위 <span class="inline"><select id="sfFrom"></select> ~ <select id="sfTo"></select></span></label>
+        <label>lock 대기 <select id="sfTimeout"></select></label>
+        <label class="chk"><input type="checkbox" id="sfOnlyLocked"> 이전 lock 채널만</label>
+        <label class="chk"><input type="checkbox" id="sfEnabled" checked> 사용</label>
+      </div>
+      <div class="f-row">
+        <label class="grow">cron (분 시 일 월 요일)
+          <input id="sfCron" placeholder="0 6 * * *" spellcheck="false" autocomplete="off">
+        </label>
+        <label>예시 <select id="sfPreset">
+          <option value="">직접 입력</option>
+          <option value="0 6 * * *">매일 06:00</option>
+          <option value="0 6,18 * * *">매일 06:00, 18:00</option>
+          <option value="0 6 * * 1-5">평일 06:00</option>
+          <option value="0 */3 * * *">3시간마다</option>
+          <option value="0 * * * *">매시 정각</option>
+          <option value="*/30 * * * *">30분마다</option>
+        </select></label>
+      </div>
+      <div class="f-hint" id="sfPreview">다음 실행: –</div>
+      <div class="f-row">
+        <button type="submit" class="primary">저장</button>
+        <button type="button" class="ghost" id="sfCancel">취소</button>
+        <span class="f-err" id="sfErr"></span>
+      </div>
+    </form>
+    <div id="schedBody" class="saved-body"></div>
+  </section>
+
+  <!-- RF trend -->
+  <section id="trendPanel" class="saved mon" hidden>
+    <div class="saved-head">
+      <h3>RF 수신 추이 <span class="muted" id="trendSub"></span></h3>
+      <div class="saved-actions">
+        <select id="trMode"></select>
+        <select id="trDays">
+          <option value="1">1일</option>
+          <option value="7" selected>7일</option>
+          <option value="30">30일</option>
+          <option value="90">90일</option>
+          <option value="0">전체</option>
+        </select>
+        <button class="ghost mini" id="btnTrRefresh">새로고침</button>
+        <button class="ghost mini" data-close="trendPanel">닫기</button>
+      </div>
+    </div>
+    <div class="trend">
+      <div class="trend-list saved-body" id="trList"></div>
+      <div class="trend-chart">
+        <div id="trTitle" class="tr-title">왼쪽 표에서 채널을 고르세요</div>
+        <div class="chart" id="chSnr"></div>
+        <div class="chart" id="chStr"></div>
+        <div class="tr-foot">
+          <span class="muted" id="trNote"></span>
+          <button class="ghost mini" id="btnTrTable">표 보기</button>
+        </div>
+        <div id="trTable" class="saved-body" hidden></div>
+      </div>
+    </div>
+  </section>
+  <!-- 1. mode select -->
+  <section id="viewMode" class="mode-select">
+    <h1>수신 모드를 선택하세요</h1>
+    <div class="mode-cards">
+      <button class="mode-card" data-mode="terrestrial">
+        <span class="mc-icon">📡</span>
+        <span class="mc-name">지상파</span>
+        <span class="mc-desc">ATSC 8-VSB · <span data-count="terrestrial">–</span>개 채널</span>
+        <span class="mc-saved" data-saved="terrestrial"></span>
+      </button>
+      <button class="mode-card" data-mode="catv">
+        <span class="mc-icon">🔌</span>
+        <span class="mc-name">케이블</span>
+        <span class="mc-desc">ATSC 8-VSB · <span data-count="catv">–</span>개 채널</span>
+        <span class="mc-saved" data-saved="catv"></span>
+      </button>
+    </div>
+  </section>
+
+  <!-- 2. channel grid + detail -->
+  <section id="viewScan" hidden>
+    <div class="toolbar">
+      <h2 id="modeTitle">지상파</h2>
+      <div class="tb-right">
+        <label id="modWrap" hidden>변조
+          <select id="modSel"></select>
+        </label>
+        <span class="scan-ctl">
+          <label for="scanFrom">CH</label>
+          <select id="scanFrom" title="시작 채널"></select>
+          <span>~</span>
+          <select id="scanTo" title="종료 채널"></select>
+          <label for="scanTimeout">lock 대기</label>
+          <select id="scanTimeout"></select>
+          <label class="chk" title="채널 기록이나 저장 목록에 lock 기록이 있는 채널만 스캔"><input type="checkbox" id="scanOnlyLocked"> 이전 lock 채널만</label>
+          <button id="btnScan" class="primary">▶ 자동 스캔</button>
+        </span>
+        <button id="btnScanView" class="ghost">📋 스캔 결과</button>
+        <button id="btnLogs" class="ghost">📝 수신 로그</button>
+        <button id="btnSaved" class="ghost">💾 저장된 채널 <span id="savedCnt">0</span></button>
+        <button id="btnStop" class="danger" disabled>■ 중지</button>
+      </div>
+    </div>
+    <div id="scanPanel" class="saved" hidden>
+      <div class="saved-head">
+        <h3 id="scanTitle">자동 스캔</h3>
+        <div class="saved-actions">
+          <span class="muted" id="scanInfo"></span>
+          <select id="scanHist" title="스캔 기록"></select>
+          <span class="export">내보내기
+            <a class="ghost mini" id="expCsv" href="#" download>CSV</a>
+            <a class="ghost mini" id="expJson" href="#" download>JSON</a>
+            <a class="ghost mini" id="expZip" href="#" download title="CSV + JSON + 캡처 이미지">ZIP</a>
+          </span>
+          <button class="danger mini" id="btnScanDel" title="이 스캔 기록 삭제">기록 삭제</button>
+          <button class="ghost mini" id="btnScanHide">닫기</button>
+        </div>
+      </div>
+      <div class="progress"><div id="scanBar"></div></div>
+      <div id="scanBody" class="saved-body"></div>
+    </div>
+    <div id="logPanel" class="saved" hidden>
+      <div class="saved-head">
+        <h3>수신 로그 <span class="muted">(최근 200건, logs/reception.log)</span></h3>
+        <div class="saved-actions"><button class="ghost mini" id="btnLogRefresh">새로고침</button></div>
+      </div>
+      <div id="logBody" class="saved-body"></div>
+    </div>
+    <div id="savedPanel" class="saved" hidden>
+      <div class="saved-head">
+        <h3>저장된 채널 <span class="muted" id="savedSub"></span></h3>
+        <div class="saved-actions">
+          <label class="muted"><input type="checkbox" id="savedAll"> 모든 모드 보기</label>
+          <span id="clearBox">
+            <button class="danger" id="btnClearMode">현재 모드 전체 삭제</button>
+            <button class="danger" id="btnClearAll">모두 삭제</button>
+          </span>
+          <span id="clearConfirm" hidden>
+            <span id="clearMsg"></span>
+            <button class="danger" id="btnClearYes">삭제</button>
+            <button class="ghost" id="btnClearNo">취소</button>
+          </span>
+        </div>
+      </div>
+      <div id="savedBody" class="saved-body"></div>
+    </div>
+    <div id="grid" class="grid"></div>
+
+    <div id="detail" class="detail" hidden>
+      <div class="detail-head">
+        <div>
+          <div class="dh-ch" id="dhCh">CH –</div>
+          <div class="dh-freq" id="dhFreq">– MHz</div>
+        </div>
+        <div class="state" id="dhState">대기</div>
+      </div>
+
+      <div class="video-wrap" id="videoWrap" hidden>
+        <div class="video-box">
+          <iframe id="player" title="WebRTC 미리보기" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>
+        </div>
+        <div class="video-note" id="videoNote"></div>
+      </div>
+
+      <div class="panels">
+        <div class="panel fe">
+          <h3>프론트엔드 상태</h3>
+          <div class="bits" id="feBits"></div>
+          <div class="meters">
+            <div class="meter">
+              <div class="m-label">SNR</div>
+              <div class="m-val" id="feSnr">–</div>
+              <div class="bar"><div id="feSnrBar"></div></div>
+            </div>
+            <div class="meter">
+              <div class="m-label">신호 품질</div>
+              <div class="m-val" id="feStr">–</div>
+              <div class="bar"><div id="feStrBar"></div></div>
+            </div>
+          </div>
+          <table class="kv">
+            <tr><th>UCB (오류 블록)</th><td id="feUcb">–</td></tr>
+            <tr><th>UCB 증가율</th><td id="feUcbRate">–</td></tr>
+            <tr><th>BER</th><td id="feBer">–</td></tr>
+            <tr><th>TEI 패킷 (비율)</th><td id="feTei">–</td></tr>
+            <tr><th>TS 비트레이트</th><td id="tsRate">–</td></tr>
+            <tr><th>TS 패킷 / 오류</th><td id="tsPk">–</td></tr>
+            <tr><th>경과 시간</th><td id="feElapsed">–</td></tr>
+            <tr><th>캡처</th><td id="feCapture">–</td></tr>
+          </table>
+          <svg id="spark" class="spark" viewBox="0 0 300 60" preserveAspectRatio="none"></svg>
+          <div class="spark-label">SNR 추이 (최근 2분, 0–40 dB)</div>
+        </div>
+
+        <div class="panel log">
+          <h3>TSDuck 로그</h3>
+          <pre id="log"></pre>
+        </div>
+      </div>
+
+      <div id="psip" class="psip" hidden>
+        <div class="tabs" id="tabs"></div>
+        <div id="tabBody" class="tab-body"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+<script src="monitor.js"></script>
+</body>
+</html>
