@@ -69,5 +69,9 @@ FE_GET_PROPERTY = _ior(83, ctypes.sizeof(_Props))
 |---|---|---|---|
 | SKYTV HD USB mini (lgdt3305/LGDT3304) | v3, 0.1 dB | v3, SNR 환산 | v3 항상 0, v5 없음 |
 | WinTV-HVR-975 (lgdt3306a + si2157) | v5 CNR dB | **v5 dBm (실제 RF 레벨)** | v3 0xFFFFFFFF 고정, v5 없음 |
+| DViCO FusionHDTV7 USB (au0828 + au8522 + xc5000) | v3, 0.1 dB | v3, SNR 환산 | v5 없음 |
+
+USB 장치에 manufacturer/product 문자열이 없는 카드(FusionHDTV7 `0fe9:d620`)는 sysfs로 이름을 얻을 수 없어서
+커널 보드 목록의 이름을 USB ID 표(`KNOWN_USB`)로 둡니다.
 
 카드를 바꾸면 SNR·품질 값의 의미가 달라지므로 기준값은 카드별로 따로 계산해야 합니다(같은 채널이 SNR 9.6 → 31.8 dB로 바뀐 예가 있었음).

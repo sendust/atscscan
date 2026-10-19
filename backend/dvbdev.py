@@ -128,6 +128,12 @@ def probe_frontend(adapter, frontend):
         os.close(fd)
 
 
+# Cards whose USB descriptors carry no manufacturer/product strings (name from the kernel board list).
+KNOWN_USB = {
+    '0fe9:d620': 'DViCO FusionHDTV7 USB',
+}
+
+
 def usb_info(adapter, frontend=0):
     try:
         d = os.path.realpath(f'/sys/class/dvb/dvb{adapter}.frontend{frontend}/device')
@@ -141,8 +147,9 @@ def usb_info(adapter, frontend=0):
                         return f.read().strip()
                 except OSError:
                     return ''
-            name = ' '.join(x for x in (rd('manufacturer'), rd('product')) if x) or None
-            return name, f"{rd('idVendor')}:{rd('idProduct')}"
+            uid = f"{rd('idVendor')}:{rd('idProduct')}"
+            name = ' '.join(x for x in (rd('manufacturer'), rd('product')) if x) or KNOWN_USB.get(uid)
+            return name, uid
     return None, None
 
 

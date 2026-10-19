@@ -2,7 +2,7 @@
 
 SBS 목동 사내공청시스템은 ATSC 모듈레이터로 70개가 넘는 채널을 운용하고 있으며, 유지보수는 방송기기 정비실이 담당합니다.
 이 시스템은 그 헤드엔드 모듈레이터들의 출력과 동작 상태를 매일 모니터링합니다.
-리눅스 DVB ATSC 수신기(Skydigital SKYTV HD USB mini, Hauppauge WinTV-HVR-975 등)로 각 채널을 튜닝해
+리눅스 DVB ATSC 수신기(Skydigital SKYTV HD USB mini, Hauppauge WinTV-HVR-975, DViCO FusionHDTV7 USB 등)로 각 채널을 튜닝해
 수신 레벨(SNR, RF 레벨, 신호 품질, BER/UCB)과 PSIP를 확인합니다.
 정해진 시각에 자동 스캔하고, 채널별 이력과 비교해 수신 값이 크게 떨어지거나 영상이 멈추면 화면과 텔레그램으로 알립니다.
 
@@ -91,6 +91,8 @@ www/                index.html, app.js(수신·스캔), monitor.js(경보·스�
 - lock이 잡히면 PSIP/PSI 테이블을 실시간으로 수집해 탭별 표로 보여줍니다.
   - VCT(가상채널), EIT(편성표, ETT 상세 설명 연결, KST 표시), STT(방송 시각), MGT, RRT, PAT/PMT
   - TS 분석: 서비스/PID별 비트레이트, 패킷 수, CC 오류
+    - 비디오 프레임 레이트는 캡처용 ffmpeg가 디코딩한 값으로 표시합니다. TSDuck 3.44 `analyze`/`pes`는
+      MPEG-2 비디오를 frame_rate_code와 관계없이 항상 "@25 Hz"로 표시합니다(23.976/25/29.97/30/59.94 시험 스트림으로 확인).
 - 다른 버튼을 누르거나 "중지"를 누를 때까지 계속 수신합니다.
 
 ## 헤드엔드 모니터링
@@ -203,7 +205,7 @@ crontab과 같은 5필드 형식(`분 시 일 월 요일`)으로 자동 스캔�
 | BER | DVBv5 오류 비트/전체 비트 카운터의 증가량으로 계산(post-FEC 우선, 없으면 pre). DVBv3 BER은 단위가 드라이버마다 정의되지 않고 0이나 0xFFFFFFFF만 주는 경우가 많아 쓰지 않음 |
 | 주파수 범위 | 카드의 최소·최대 주파수 밖 채널(예: 858 MHz 카드의 861 MHz)은 스캔에서 제외하고 "범위 밖 N개 제외"로 표시 |
 | 기준값 | 측정마다 어떤 카드로 쟀는지(`device`: USB ID + 프론트엔드 이름) 기록하고, **같은 카드의 측정끼리만** 기준값을 계산. 그래프는 카드가 바뀐 지점에서 선을 끊고 "수신기 변경"을 표시 |
-| 이름 | 헤더에 USB 제품명 · 프론트엔드 이름 · 장치 경로(10초마다 다시 읽어 카드 교체를 반영). `device_label`로 직접 지정 가능 |
+| 이름 | 헤더에 USB 제품명 · 프론트엔드 이름 · 장치 경로(10초마다 다시 읽어 카드 교체를 반영). USB 이름 문자열이 없는 카드는 `dvbdev.KNOWN_USB` 표의 이름을 씀. `device_label`로 직접 지정 가능 |
 | 방송 방식 | 모드별 delivery/변조를 `modes`로 변경(예: 다른 현장에서 케이블을 QAM으로) |
 
 확인된 카드:
@@ -212,6 +214,7 @@ crontab과 같은 5필드 형식(`분 시 일 월 요일`)으로 자동 스캔�
 |---|---|---|---|---|
 | Skydigital SKYTV HD USB mini (`1c6c:04c9`) | dvb_usb_skytv + lgdt3305(LGDT3304) + xc5000 | DVBv3, 0.1 dB | 없음(SNR 환산 %) | 없음(항상 0) |
 | Hauppauge WinTV-HVR-975 (`2040:836a`) | em28xx + lgdt3306a + si2157(Si2177) | DVBv5 CNR | **DVBv5 dBm** | 없음(DVBv3는 0xFFFFFFFF 고정, v5 미제공) |
+| DViCO FusionHDTV7 USB (`0fe9:d620`) | au0828 + au8522 + xc5000 | DVBv3, 0.1 dB | 없음(SNR 환산 %) | 없음(v5 미제공) |
 
 `GET /api/devices`로 시스템의 모든 프론트엔드와 모드별 선택 결과를 볼 수 있습니다.
 BER을 주지 않는 카드에서는 TSDuck 분석의 **TEI(전송 오류 표시) 패킷 수와 비율**을 함께 봅니다.

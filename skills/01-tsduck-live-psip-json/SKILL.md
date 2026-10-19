@@ -56,3 +56,10 @@ tsp --realtime \
 - TSDuck dvbstatus에 `snr`, `strength`, `bit-error-rate`가 오려면 드라이버가 **DVBv5 통계**를 제공해야 합니다.
   lgdt3305처럼 DVBv3만 있는 드라이버면 비어 있습니다 → 02 스킬로 직접 읽음.
 - `tsscan`의 korea 지역에는 UHF 정의가 없는 버전이 있습니다. 한국 지상파는 미국과 같은 6 MHz 채널표라 `--usa` 사용.
+
+## TSDuck의 MPEG-2 프레임 레이트 표시 오류
+TSDuck 3.44의 `analyze`와 `pes --video-attributes`는 MPEG-2 비디오를 frame_rate_code와 관계없이 항상
+`1920x1080i, @25 Hz`로 표시합니다(23.976/25/29.97/30/59.94 fps 시험 스트림이 모두 25 Hz로 나옴. 해상도·비트레이트는 정상).
+같은 TS를 받는 캡처용 ffmpeg를 `-loglevel level+info`로 돌려 입력 스트림 줄
+`Stream #0:0[0x11]: Video: mpeg2video ..., 29.97 fps`에서 PID별 프레임 레이트를 얻고, 그 값으로 설명을 고칩니다.
+`[info]` 줄은 로그에서 빼고, `[error]`/`[warning]` 표시만 떼어 로그에 남깁니다.
