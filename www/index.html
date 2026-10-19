@@ -11,7 +11,7 @@
   <div class="brand">
     <span class="logo">◉</span>
     <span class="title" id="appTitle">SBS 헤드엔드 모니터 시스템</span>
-    <span class="sub" id="subtitle">SKYTV HD USB mini · /dev/dvb/adapter0</span>
+    <span class="sub" id="subtitle">/dev/dvb/adapter0</span>
   </div>
   <div class="top-right">
     <button class="ghost alert-btn" id="btnAlerts" title="경보 목록">🔔 경보 <span id="alertCnt">0</span></button>
@@ -107,6 +107,7 @@
         <div id="trTitle" class="tr-title">왼쪽 표에서 채널을 고르세요</div>
         <div class="chart" id="chSnr"></div>
         <div class="chart" id="chStr"></div>
+        <div class="chart" id="chRf"></div>
         <div class="tr-foot">
           <span class="muted" id="trNote"></span>
           <button class="ghost mini" id="btnTrTable">표 보기</button>
@@ -230,7 +231,7 @@
               <div class="bar"><div id="feSnrBar"></div></div>
             </div>
             <div class="meter">
-              <div class="m-label">신호 품질</div>
+              <div class="m-label" id="feStrLabel">신호 품질</div>
               <div class="m-val" id="feStr">–</div>
               <div class="bar"><div id="feStrBar"></div></div>
             </div>

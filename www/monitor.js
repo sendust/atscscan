@@ -19,7 +19,7 @@ const SEV = {
   warning: { icon: '▲', label: '주의', cls: 'sev-warning' },
   good: { icon: '●', label: '정상', cls: 'sev-good' },
 };
-const KIND_TEXT = { nolock: 'lock 실패', weak: '불안정', snr_drop: 'SNR 하락', strength_drop: '품질 하락', freeze: '영상 정지' };
+const KIND_TEXT = { nolock: 'lock 실패', weak: '불안정', snr_drop: 'SNR 하락', strength_drop: '품질 하락', freeze: '영상 정지', rf_drop: 'RF 레벨 하락' };
 const sevTag = (sev) => `<span class="sev ${SEV[sev].cls}">${SEV[sev].icon} ${SEV[sev].label}</span>`;
 const modeLabel = (m) => app.modes?.[m]?.label || m;
 const parseT = (s) => (s ? new Date(s.replace(' ', 'T')) : null);
@@ -31,6 +31,12 @@ function onMonitorStatus(st) {
   const m = st?.monitor;
   if (!m) return;
   if (m.title && $('#appTitle').textContent !== m.title) { $('#appTitle').textContent = m.title; document.title = m.title; }
+  if (m.device) {
+    const dv = m.device;
+    const sub = [dv.name, dv.frontend && dv.frontend !== dv.name ? dv.frontend : null, dv.path].filter(Boolean).join(' · ');
+    if ($('#subtitle').textContent !== sub) $('#subtitle').textContent = sub;
+    $('#subtitle').title = `USB ${dv.usb_id || '-'} · ${dv.freq_min_mhz ?? '?'}~${dv.freq_max_mhz ?? '?'} MHz`;
+  }
   mon.counts = m.alerts;
   const btn = $('#btnAlerts');
   $('#alertCnt').textContent = m.alerts.unacked;
@@ -175,7 +181,7 @@ async function loadTrend(resetSel = true) {
   mon.summary = d.channels || [];
   const thr = mon.config?.alerts?.snr_drop_db ?? 3;
   $('#trendSub').textContent = `(${modeLabel(mon.trMode)} · 수신 기록이 있는 채널 ${mon.summary.length}개)`;
-  $('#trList').innerHTML = table(['상태', 'CH', '주파수', '가상채널', '마지막 측정', 'SNR', '기준', 'Δ', '품질', '최근 30회'],
+  $('#trList').innerHTML = table(['상태', 'CH', '주파수', '가상채널', '마지막 측정', 'SNR', '기준', 'Δ', 'RF', '품질', '최근 30회'],
     mon.summary.map((c) => {
       const l = c.last;
       const sev = c.alerts.some((a) => a.severity === 'critical') ? 'critical'
@@ -189,6 +195,7 @@ async function loadTrend(resetSel = true) {
         <td class="m">${l.result !== 'locked' ? `<span class="sev sev-critical">${esc(l.result)}</span>` : (l.snr_avg ?? '–') + ' dB'}</td>
         <td class="m">${c.baseline ? c.baseline.snr + ' dB' : '<span class="muted">–</span>'}</td>
         <td class="m ${deltaCls}">${delta == null ? '–' : (delta > 0 ? '+' : '') + delta}</td>
+        <td class="m">${l.rf_dbm_avg == null ? '–' : l.rf_dbm_avg + ' dBm'}</td>
         <td class="m">${l.strength_pct == null ? '–' : l.strength_pct + '%'}</td>
         <td>${spark(c.spark)}</td></tr>`;
     }), '아직 수신 기록이 없습니다. 자동 스캔이나 튜닝을 하면 쌓입니다.');
@@ -234,9 +241,16 @@ function drawCharts() {
   chart($('#chSnr'), h, { key: 'snr_avg', label: 'SNR (평균)', unit: 'dB', fixed: [0, 40], baseline: base?.snr,
     threshold: base ? base.snr - thr : null });
   chart($('#chStr'), h, { key: 'strength_pct', label: '신호 품질', unit: '%', fixed: [0, 100], baseline: base?.strength });
+  const hasRf = h.some((e) => e.rf_dbm_avg != null);
+  $('#chRf').hidden = !hasRf;
+  if (hasRf) {
+    const rthr = mon.config?.alerts?.rf_drop_db ?? 6;
+    chart($('#chRf'), h, { key: 'rf_dbm_avg', label: 'RF 레벨', unit: 'dBm', fixed: [-100, 0], baseline: base?.rf,
+      threshold: base?.rf != null ? base.rf - rthr : null });
+  }
   const fails = h.filter((e) => e.result !== 'locked').length;
   $('#trNote').textContent = h.length
-    ? `기준선 = 최근 lock ${base?.count ?? 0}회 중앙값 · 점선(주의) = 기준 −${thr} dB · ✕ = lock 실패/불안정 ${fails}회 · ❄ = 영상 정지 ${h.filter((e) => e.freeze?.frozen).length}회`
+    ? `${base ? `기준선 = 이 수신기의 최근 lock ${base.count}회 중앙값` : '기준선 없음 (이 수신기로 lock 측정 3회 이상 필요)'} · 점선(주의) = 기준 −${thr} dB · ✕ = lock 실패/불안정 ${fails}회 · ❄ = 영상 정지 ${h.filter((e) => e.freeze?.frozen).length}회`
     : '';
 }
 
@@ -272,8 +286,12 @@ function chart(el, h, o) {
   }
   let path = '', pen = false;
   const pts = [];
+  const devAt = (i) => h[i].device || 'legacy';
+  const changes = [];                          // card swaps: break the line, scales differ between cards
+  h.forEach((e, i) => { if (i && devAt(i) !== devAt(i - 1)) changes.push(i); });
   h.forEach((e, i) => {
     const v = e.result === 'locked' ? e[o.key] : null;
+    if (changes.includes(i)) pen = false;
     if (v == null) { pen = false; return; }
     const p = [X(ts[i]), Y(v)];
     pts.push({ i, x: p[0], y: p[1] });
@@ -284,7 +302,7 @@ function chart(el, h, o) {
     + (o.key === 'snr_avg' ? h.map((e, i) => (e.freeze?.frozen ? `<text x="${X(ts[i]).toFixed(1)}" y="${T + 12}" class="ev-fz" text-anchor="middle">❄</text>` : '')).join('') : '');
   const dots = pts.length <= 80 ? pts.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" class="dot"/>`).join('') : '';
   const bl = o.baseline != null ? `<line x1="${L}" x2="${W - R}" y1="${Y(o.baseline)}" y2="${Y(o.baseline)}" class="base"/>
-    <text x="${W - R + 6}" y="${Y(o.baseline) + 4}" class="lab">기준 ${o.baseline}${o.unit === '%' ? '%' : ''}</text>` : '';
+    <text x="${W - R + 6}" y="${Y(o.baseline) + 4}" class="lab">기준 ${o.baseline}${o.unit === '%' ? '%' : o.unit === 'dBm' ? '' : ''}</text>` : '';
   const th = o.threshold != null && o.threshold > lo ? `<line x1="${L}" x2="${W - R}" y1="${Y(o.threshold)}" y2="${Y(o.threshold)}" class="thr"/>
     <text x="${W - R + 6}" y="${Y(o.threshold) + 4}" class="lab thr-lab">주의 ${o.threshold.toFixed(1)}</text>` : '';
   el.innerHTML = `<div class="ch-label">${esc(o.label)} <span class="muted">(${o.unit})</span></div>
@@ -292,6 +310,8 @@ function chart(el, h, o) {
     ${yt.map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" class="grid"/><text x="${L - 6}" y="${Y(v) + 4}" class="ax" text-anchor="end">${v}</text>`).join('')}
     ${xt.map((t) => `<text x="${X(t)}" y="${H - 6}" class="ax" text-anchor="middle">${fmtX(t)}</text>`).join('')}
     ${th}${bl}
+    ${changes.map((i) => `<line x1="${X(ts[i])}" x2="${X(ts[i])}" y1="${T}" y2="${H - B}" class="devchg"/>
+      <text x="${X(ts[i]) + 4}" y="${T + 10}" class="lab devchg-lab">수신기 변경</text>`).join('')}
     <path d="${path}" class="series"/>${dots}${fails}
     <line class="xhair" y1="${T}" y2="${H - B}" x1="-10" x2="-10"/>
     <circle class="hdot" r="5" cx="-10" cy="-10"/>
@@ -314,9 +334,10 @@ function chart(el, h, o) {
     const e = h[i], x = X(ts[i]), v = e.result === 'locked' ? e[o.key] : null;
     xl.setAttribute('x1', x); xl.setAttribute('x2', x);
     hd.setAttribute('cx', v == null ? -10 : x); hd.setAttribute('cy', v == null ? -10 : Y(v));
-    tip.innerHTML = `<b>${esc(e.time)}</b><br>${e.result === 'locked' ? `${esc(o.label)} <b>${v ?? '–'}${o.unit === '%' ? '%' : ' dB'}</b>` : `<span class="sev sev-critical">✕ ${esc(e.result)}</span>`}
+    tip.innerHTML = `<b>${esc(e.time)}</b><br>${e.result === 'locked' ? `${esc(o.label)} <b>${v ?? '–'}${o.unit === '%' ? '%' : ' ' + o.unit}</b>` : `<span class="sev sev-critical">✕ ${esc(e.result)}</span>`}
       ${o.key === 'snr_avg' && e.snr_min != null ? `<br>최소 ${e.snr_min} dB` : ''}
       ${e.freeze?.frozen ? `<br><span class="fz">❄ 영상 정지 ${e.freeze.duration}초</span>` : ''}
+      ${e.device ? `<br><span class="muted">${esc(e.device.split('|')[1] || e.device)}</span>` : ''}
       <br><span class="muted">${e.source === 'schedule' ? '스케줄' : e.source === 'scan' ? '자동 스캔' : '수동'}${e.ucb != null ? ' · UCB ' + e.ucb : ''}</span>`;
     tip.hidden = false;
     const r = svg.getBoundingClientRect();
@@ -327,16 +348,18 @@ function chart(el, h, o) {
 }
 
 function syncHover(i) {
-  for (const id of ['#chSnr', '#chStr']) $(id)._hover?.(i);
+  for (const id of ['#chSnr', '#chStr', '#chRf']) $(id)._hover?.(i);
 }
 
 function renderTrendTable() {
   const h = (mon.hist || []).slice().reverse();
-  $('#trTable').innerHTML = table(['시각', '구분', '결과', '영상', 'SNR 평균', 'SNR 최소', '품질', 'UCB', '기준 SNR', '캡처'],
+  $('#trTable').innerHTML = table(['시각', '구분', '결과', '영상', 'SNR 평균', 'SNR 최소', 'RF 레벨', '품질', 'BER', 'UCB', '기준 SNR', '수신기', '캡처'],
     h.map((e) => `<tr class="${e.freeze?.frozen ? 'frozen' : ''}"><td class="m">${esc(e.time)}</td><td>${e.source === 'schedule' ? '스케줄' : e.source === 'scan' ? '자동' : '수동'}</td>
       <td class="res-${e.result}">${esc(RES_TEXT[e.result] || e.result)}</td><td>${e.freeze ? fzBadge(e.freeze) : '<span class="muted">–</span>'}</td>
-      <td class="m">${e.snr_avg ?? '–'}</td><td class="m">${e.snr_min ?? '–'}</td><td class="m">${e.strength_pct ?? '–'}</td>
-      <td class="m">${e.ucb ?? '–'}</td><td class="m">${e.baseline ? e.baseline.snr : '–'}</td><td>${thumbF(e.capture, e.freeze)}</td></tr>`));
+      <td class="m">${e.snr_avg ?? '–'}</td><td class="m">${e.snr_min ?? '–'}</td><td class="m">${fmtRf(e.rf_dbm_avg)}</td>
+      <td class="m">${e.strength_pct ?? '–'}</td><td class="m">${fmtBer(e.ber)}</td>
+      <td class="m">${e.ucb ?? '–'}</td><td class="m">${e.baseline ? e.baseline.snr : '–'}</td>
+      <td class="muted">${esc((e.device || '').split('|')[1] || e.device || '–')}</td><td>${thumbF(e.capture, e.freeze)}</td></tr>`));
 }
 
 /* ---------------- panels & events ---------------- */

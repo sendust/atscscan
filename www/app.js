@@ -98,16 +98,26 @@ function renderStatus() {
   const on = new Set(fe?.bits || []);
   $('#feBits').innerHTML = BITS.map((b) => `<span class="bit ${on.has(b) ? 'on' : ''} ${b === 'LOCK' ? 'lock' : ''}">${b}</span>`).join('');
   const snr = fe?.snr_db;
-  $('#feSnr').textContent = snr == null ? '–' : `${snr.toFixed(1)} dB`;
+  $('#feSnr').textContent = snr != null ? `${snr.toFixed(1)} dB`
+    : (fe?.snr_src === 'raw' && fe?.snr_raw != null ? `raw ${fe.snr_raw}` : '–');
+  $('#feSnr').title = fe?.snr_src === 'v5' ? 'DVBv5 CNR' : fe?.snr_src === 'v3' ? 'DVBv3 SNR (드라이버 단위 환산)' : fe?.snr_src === 'raw' ? '드라이버 고유 단위 (dB 아님)' : '';
   $('#feSnrBar').style.width = snr == null ? '0' : Math.min(100, (snr / 40) * 100) + '%';
   $('#feSnrBar').style.background = snr == null ? '' : snr >= 20 ? 'var(--ok)' : snr >= 15.5 ? 'var(--warn)' : 'var(--bad)';
-  const str = fe?.strength_pct;
-  $('#feStr').textContent = str == null ? '–' : `${str.toFixed(0)} %`;
-  $('#feStrBar').style.width = (str || 0) + '%';
+  if (fe?.signal_dbm != null) {                 // card reports the real RF input level
+    $('#feStrLabel').textContent = 'RF 레벨';
+    $('#feStr').textContent = `${fe.signal_dbm.toFixed(1)} dBm`;
+    $('#feStrBar').style.width = Math.max(0, Math.min(100, ((fe.signal_dbm + 90) / 70) * 100)) + '%';
+  } else {
+    const str = fe?.strength_pct;
+    $('#feStrLabel').textContent = '신호 품질';
+    $('#feStr').textContent = str == null ? '–' : `${str.toFixed(0)} %`;
+    $('#feStrBar').style.width = (str || 0) + '%';
+  }
   $('#feUcb').textContent = fe?.ucb ?? '–';
   $('#feUcbRate').textContent = fe?.ucb_rate == null ? '–' : `${fe.ucb_rate} /s`;
   const er = s.errors || {};
-  $('#feBer').textContent = er.ber != null ? String(er.ber) : (fe ? 'N/A (드라이버·TSDuck 미제공)' : '–');
+  $('#feBer').textContent = fe?.ber != null ? `${fmtBer(fe.ber)} (${fe.ber_src})`
+    : er.ber != null ? `${er.ber} (TSDuck)` : (fe ? 'N/A (이 카드·드라이버 미제공)' : '–');
   $('#feTei').textContent = er.tei == null ? '–' : `${er.tei.toLocaleString()} (${(er.per * 100).toFixed(3)}%)`;
   $('#tsRate').textContent = fmtRate(s.ts?.bitrate);
   $('#tsPk').textContent = s.ts ? `${(s.ts.packets ?? 0).toLocaleString()} / sync ${s.ts.invalid_syncs ?? 0}, TEI ${s.ts.transport_errors ?? 0}` : '–';
@@ -343,6 +353,8 @@ const fzBadge = (fz) => !fz ? '<span class="muted">–</span>'
   : `<span class="fz-ok">정상</span> <span class="muted">${fz.window.toFixed(0)}초 분석</span>`;
 const thumbF = (name, fz) => fz?.frozen
   ? `<span class="thumb-wrap">${thumb(name)}<span class="thumb-fz">❄ 정지</span></span>` : thumb(name);
+const fmtBer = (b) => (b == null ? '–' : b === 0 ? '0' : Number(b).toExponential(2));
+const fmtRf = (v) => (v == null ? '–' : `${Number(v).toFixed(1)} dBm`);
 const fmtSnr = (e) => e.snr_avg == null ? '–' : `${e.snr_avg.toFixed(1)} dB <span class="muted">(min ${e.snr_min.toFixed(1)})</span>`;
 let scanSig = '';
 let scanHidden = false;
@@ -400,7 +412,8 @@ function renderScan() {
     ? `자동 스캔 중 · ${sc.index}/${sc.total}` + (sc.current ? ` · CH ${sc.current.channel} (${sc.current.freq_mhz} MHz)` : '')
     : `자동 스캔 ${sc.cancelled ? '중단됨' : '완료'} · ${done}/${sc.total}`;
   $('#scanInfo').innerHTML = esc(`${MODE_LABEL(sc.mode)} · CH ${sc.from ?? '?'}~${sc.to ?? '?'}${sc.only_locked ? ' (이전 lock 채널만)' : ''} · lock 대기 ${sc.timeout}초 · lock ${sc.locked}개 · ${elapsed}초`)
-    + (sc.frozen ? ` · <span class="fz">❄ 영상 정지 ${sc.frozen}개</span>` : '');
+    + (sc.frozen ? ` · <span class="fz">❄ 영상 정지 ${sc.frozen}개</span>` : '')
+    + (sc.skipped?.length ? ` · <span class="muted" title="CH ${sc.skipped.join(', ')}">수신기 주파수 범위 밖 ${sc.skipped.length}개 제외</span>` : '');
   for (const [id, fmt] of [['#expCsv', 'csv'], ['#expJson', 'json'], ['#expZip', 'zip']]) {
     const a = $(id);
     a.href = sc.id ? `/api/scans/${encodeURIComponent(sc.id)}/export?format=${fmt}` : '#';
@@ -411,12 +424,13 @@ function renderScan() {
   if (sig === scanSig) return;
   scanSig = sig;
   const rows = sc.results.slice().reverse();
-  $('#scanBody').innerHTML = table(['캡처', 'CH', '주파수', '결과', '영상', 'lock 시간', 'SNR (평균)', '신호 품질', 'UCB', 'TEI', '가상채널', 'TSID'],
+  $('#scanBody').innerHTML = table(['캡처', 'CH', '주파수', '결과', '영상', 'lock 시간', 'SNR (평균)', 'RF 레벨', '신호 품질', 'BER', 'UCB', 'TEI', '가상채널', 'TSID'],
     rows.map((e) => `<tr class="${e.freeze?.frozen ? 'frozen' : ''}">
       <td>${thumbF(e.capture, e.freeze)}</td><td class="m">${e.channel}</td><td class="m">${e.freq_mhz} MHz</td>
       <td class="res-${e.result}">${RES_TEXT[e.result] || e.result}</td><td>${e.result === 'locked' ? fzBadge(e.freeze) : '<span class="muted">–</span>'}</td>
       <td class="m">${e.lock_time_s == null ? '–' : e.lock_time_s + ' s'}</td><td class="m">${fmtSnr(e)}</td>
-      <td class="m">${e.strength_pct == null ? '–' : e.strength_pct + ' %'}</td><td class="m">${e.ucb ?? '–'}</td>
+      <td class="m">${fmtRf(e.rf_dbm_avg)}</td>
+      <td class="m">${e.strength_pct == null ? '–' : e.strength_pct + ' %'}</td><td class="m">${fmtBer(e.ber)}</td><td class="m">${e.ucb ?? '–'}</td>
       <td class="m">${e.tei ?? '–'}</td>
       <td class="m">${(e.virtual_channels || []).map(esc).join('<br>') || '–'}</td><td class="m">${e.tsid ?? '–'}</td></tr>`),
     sc.running ? '첫 주파수를 스캔하는 중…' : '결과 없음');
@@ -451,13 +465,14 @@ function saveRange() {
 
 async function loadLogs() {
   const d = await api('/api/logs?limit=200');
-  $('#logBody').innerHTML = table(['시각', '구분', '모드', 'CH', '주파수', '결과', '영상', 'SNR (평균)', '마지막 SNR', '신호 품질', 'UCB', '비트레이트', '가상채널', 'TSID', '캡처'],
+  $('#logBody').innerHTML = table(['시각', '구분', '모드', 'CH', '주파수', '결과', '영상', 'SNR (평균)', '마지막 SNR', 'RF 레벨', '신호 품질', 'BER', 'UCB', '비트레이트', '가상채널', 'TSID', '캡처'],
     (d.entries || []).map((e) => `<tr>
       <td class="m">${esc(e.time)}</td><td>${e.source === 'schedule' ? '스케줄' : e.source === 'scan' ? '자동' : '수동'}</td><td>${esc(MODE_LABEL(e.mode))}</td>
       <td class="m">${e.channel}</td><td class="m">${e.freq_mhz} MHz</td>
       <td class="res-${e.result}">${RES_TEXT[e.result] || e.result}</td><td>${e.freeze ? fzBadge(e.freeze) : '<span class="muted">–</span>'}</td>
       <td class="m">${fmtSnr(e)}</td><td class="m">${e.snr_last == null ? '–' : e.snr_last.toFixed(1) + ' dB'}</td>
-      <td class="m">${e.strength_pct == null ? '–' : e.strength_pct + ' %'}</td><td class="m">${e.ucb ?? '–'}</td>
+      <td class="m">${fmtRf(e.rf_dbm_avg)}</td>
+      <td class="m">${e.strength_pct == null ? '–' : e.strength_pct + ' %'}</td><td class="m">${fmtBer(e.ber)}</td><td class="m">${e.ucb ?? '–'}</td>
       <td class="m">${fmtRate(e.bitrate)}</td><td class="m">${(e.virtual_channels || []).map(esc).join(', ') || '–'}</td>
       <td class="m">${e.tsid ?? '–'}</td><td>${thumbF(e.capture, e.freeze)}</td></tr>`),
     '아직 기록이 없습니다.');

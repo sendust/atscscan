@@ -1,6 +1,10 @@
 {
   "title": "SBS 헤드엔드 모니터 시스템",
   "nvidia": true,
+  "device_label": "",
+  "adapter": "auto",
+  "frontend": "auto",
+  "modes": {},
   "freeze": {
     "enabled": true,
     "min_sec": 2.0,
@@ -21,6 +25,8 @@
     "snr_drop_db": 3.0,
     "snr_critical_drop_db": 6.0,
     "strength_drop_pct": 15.0,
+    "rf_drop_db": 6.0,
+    "rf_critical_drop_db": 10.0,
     "alert_on_manual": false
   }
 }

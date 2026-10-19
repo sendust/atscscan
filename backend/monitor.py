@@ -15,6 +15,10 @@ import uuid
 DEFAULT_CONFIG = {
     "title": "SBS 헤드엔드 모니터 시스템",
     "nvidia": True,                 # true: NVIDIA NVENC + CUDA filters for the WebRTC preview, false: CPU only
+    "device_label": "",             # name shown in the UI header; empty = read from the card (USB product / frontend)
+    "adapter": "auto",              # /dev/dvb/adapterN to use, or "auto"
+    "frontend": "auto",             # frontend number, or "auto" = first frontend supporting the mode's delivery system
+    "modes": {},                    # optional per-mode overrides, e.g. {"catv": {"delivery": "DVB-C/B", "modulations": ["256-QAM", "64-QAM"]}}
     "freeze": {
         "enabled": True,            # analyse the first service's video during auto / scheduled scans
         "min_sec": 2.0,             # still picture at least this long -> flagged (capped at 90% of the window)
@@ -36,6 +40,8 @@ DEFAULT_CONFIG = {
         "snr_drop_db": 3.0,         # warning when SNR is this much below the baseline
         "snr_critical_drop_db": 6.0,
         "strength_drop_pct": 15.0,  # warning when signal quality (%) drops this many points
+        "rf_drop_db": 6.0,          # cards that report RF level (dBm): warning when it drops this much
+        "rf_critical_drop_db": 10.0,
         "alert_on_manual": False    # evaluate manual tunes too (default: auto/scheduled scans only)
     }
 }
@@ -224,16 +230,23 @@ class ChannelHistory:
                     pass
         return sorted(res)
 
-    def baseline(self, mode, channel, n, min_n):
-        """Median SNR / quality of the last n locked measurements (None if fewer than min_n)."""
-        locked = [e for e in self.read(mode, channel) if e.get('result') == 'locked' and e.get('snr_avg') is not None]
+    def baseline(self, mode, channel, n, min_n, device=None):
+        """Median SNR / quality / RF level of the last n locked measurements made with the same card.
+
+        SNR and quality scales differ between tuner cards, so measurements of another card are ignored
+        (entries without a device key count as the same card only when no device is given).
+        """
+        locked = [e for e in self.read(mode, channel) if e.get('result') == 'locked' and e.get('snr_avg') is not None
+                  and (device is None or e.get('device') == device)]
         locked = locked[-n:]
         if len(locked) < min_n:
             return None
         strengths = [e['strength_pct'] for e in locked if e.get('strength_pct') is not None]
-        return {'count': len(locked),
+        rfs = [e['rf_dbm_avg'] for e in locked if e.get('rf_dbm_avg') is not None]
+        return {'count': len(locked), 'device': device,
                 'snr': round(statistics.median(e['snr_avg'] for e in locked), 1),
-                'strength': round(statistics.median(strengths), 1) if strengths else None}
+                'strength': round(statistics.median(strengths), 1) if strengths else None,
+                'rf': round(statistics.median(rfs), 1) if len(rfs) >= min_n else None}
 
     def import_reception_log(self, path):
         """One-time backfill from logs/reception.jsonl when the per-channel directory is empty."""
@@ -356,6 +369,11 @@ def evaluate(e, cfg):
             if drop >= a['snr_drop_db']:
                 sev = 'critical' if drop >= a['snr_critical_drop_db'] else 'warning'
                 out.append(('snr_drop', sev, f"SNR {e['snr_avg']} dB — 평소 {b['snr']} dB보다 {drop} dB 낮음"))
+        if e.get('rf_dbm_avg') is not None and b.get('rf') is not None:
+            drop = round(b['rf'] - e['rf_dbm_avg'], 1)
+            if drop >= a.get('rf_drop_db', 6.0):
+                sev = 'critical' if drop >= a.get('rf_critical_drop_db', 10.0) else 'warning'
+                out.append(('rf_drop', sev, f"RF 레벨 {e['rf_dbm_avg']} dBm — 평소 {b['rf']} dBm보다 {drop} dB 낮음"))
         if e.get('strength_pct') is not None and b.get('strength') is not None:
             drop = round(b['strength'] - e['strength_pct'], 1)
             if drop >= a['strength_drop_pct']:

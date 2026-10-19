@@ -1,12 +1,13 @@
 # SBS 헤드엔드 모니터 시스템 (atscscan)
 
 SBS 본사에 설치된 RF 헤드엔드 모듈레이터들의 출력과 동작 상태를 매일 모니터링하는 시스템입니다.
-SKYTV HD USB mini 수신기로 각 채널을 튜닝해 수신 레벨(SNR, 신호 품질, UCB)과 PSIP를 확인합니다.
+리눅스 DVB ATSC 수신기(Skydigital SKYTV HD USB mini, Hauppauge WinTV-HVR-975 등)로 각 채널을 튜닝해
+수신 레벨(SNR, RF 레벨, 신호 품질, BER/UCB)과 PSIP를 확인합니다.
 정해진 시각에 자동 스캔하고, 채널별 이력과 비교해 수신 값이 크게 떨어지거나 영상이 멈추면 화면과 텔레그램으로 알립니다.
 
 ![RF 수신 추이](docs/images/rf-trend.png)
 
-- 수신기 드라이버: [sendust/skytv_hdusbmini](https://github.com/sendust/skytv_hdusbmini) (Skydigital SKYTV HD USB mini, `/dev/dvb/adapter0`)
+- 수신기: 커널이 지원하는 ATSC 수신기면 됩니다. SKYTV HD USB mini용 드라이버는 [sendust/skytv_hdusbmini](https://github.com/sendust/skytv_hdusbmini)
 - 만들면서 쓴 기술 정리: [skills/](skills/README.md)
 
 ## 설치
@@ -127,6 +128,10 @@ crontab과 같은 5필드 형식(`분 시 일 월 요일`)으로 자동 스캔�
 {
   "title": "SBS 헤드엔드 모니터 시스템",
   "nvidia": true,                            // true: GPU(NVENC+CUDA) 미리보기, false: CPU만 사용
+  "device_label": "",                        // 헤더에 보일 수신기 이름. 비우면 카드에서 읽음(USB 제품명 · 프론트엔드)
+  "adapter": "auto",                         // 쓸 /dev/dvb/adapterN, 또는 "auto"
+  "frontend": "auto",                        // 프론트엔드 번호, 또는 "auto"(모드의 방송 방식을 지원하는 첫 프론트엔드)
+  "modes": {},                               // 모드별 방송 방식 변경, 예: {"catv": {"delivery": "DVB-C/B", "modulations": ["256-QAM"]}}
   "freeze": {
     "enabled": true,                         // 자동/스케줄 스캔에서 첫 번째 서비스 영상 정지 분석
     "min_sec": 2.0,                          // 이 시간 이상 화면이 멈추면 '영상 정지' (분석 시간의 90%를 넘지 않음)
@@ -174,10 +179,29 @@ crontab과 같은 5필드 형식(`분 시 일 월 요일`)으로 자동 스캔�
 - `alert: true`이면 '영상 정지' 경보(주의)가 생기고 텔레그램 메시지에도 포함됩니다. 다음 스캔에서 영상이 정상이면 자동 해제됩니다.
 - 컬러바·정지 슬레이트처럼 원래 움직이지 않는 화면도 정지로 판정됩니다.
 
-### BER
-- 이 수신기의 커널 드라이버(lgdt3305)는 BER을 제공하지 않습니다(DVBv3 BER은 항상 0, DVBv5 통계 미구현).
-  그래서 TSDuck의 dvbstatus에도 BER이 없습니다. 화면에는 **TSDuck이 BER을 주는 장치일 때만** 그 값을 표시하고, 아니면 N/A로 둡니다.
-- 대신 TSDuck 분석의 **TEI(전송 오류 표시) 패킷 수와 비율**을 수신 상세, 스캔 결과, 로그, CSV에 표시합니다.
+### 여러 종류의 수신기 지원
+카드마다 프론트엔드 구성, 통계 제공 방식, 단위, 주파수 범위가 다릅니다. 백엔드(`backend/dvbdev.py`)가 다음을 자동으로 처리합니다.
+
+| 항목 | 처리 |
+|---|---|
+| 장치 선택 | `/dev/dvb/adapter*/frontend*`를 모두 찾고 지원 방송 방식(`DTV_ENUM_DELSYS`)을 읽어, 모드의 방식(ATSC 등)을 지원하는 프론트엔드를 고름. ATSC가 frontend1인 카드도 동작(tsp `--device-name /dev/dvb/adapterA:F:0:0`). `adapter`/`frontend`로 직접 지정 가능 |
+| SNR | DVBv5 CNR(dB)을 우선. 없으면 DVBv3 SNR을, 단위를 아는 드라이버(LGDT3304/3305/3306A, AU8522)만 dB로 환산하고 나머지는 "raw"로 표시 |
+| RF 레벨 | 카드가 DVBv5로 dBm을 주면 **RF 레벨(dBm)**로 표시·기록·그래프·경보(기준 대비 6 dB 하락 주의, 10 dB 위험). 상대값만 주면 신호 품질 % |
+| BER | DVBv5 오류 비트/전체 비트 카운터의 증가량으로 계산(post-FEC 우선, 없으면 pre). DVBv3 BER은 단위가 드라이버마다 정의되지 않고 0이나 0xFFFFFFFF만 주는 경우가 많아 쓰지 않음 |
+| 주파수 범위 | 카드의 최소·최대 주파수 밖 채널(예: 858 MHz 카드의 861 MHz)은 스캔에서 제외하고 "범위 밖 N개 제외"로 표시 |
+| 기준값 | 측정마다 어떤 카드로 쟀는지(`device`: USB ID + 프론트엔드 이름) 기록하고, **같은 카드의 측정끼리만** 기준값을 계산. 그래프는 카드가 바뀐 지점에서 선을 끊고 "수신기 변경"을 표시 |
+| 이름 | 헤더에 USB 제품명 · 프론트엔드 이름 · 장치 경로(10초마다 다시 읽어 카드 교체를 반영). `device_label`로 직접 지정 가능 |
+| 방송 방식 | 모드별 delivery/변조를 `modes`로 변경(예: 다른 현장에서 케이블을 QAM으로) |
+
+확인된 카드:
+
+| 카드 | 드라이버 | SNR | RF 레벨 | BER |
+|---|---|---|---|---|
+| Skydigital SKYTV HD USB mini (`1c6c:04c9`) | dvb_usb_skytv + lgdt3305(LGDT3304) + xc5000 | DVBv3, 0.1 dB | 없음(SNR 환산 %) | 없음(항상 0) |
+| Hauppauge WinTV-HVR-975 (`2040:836a`) | em28xx + lgdt3306a + si2157(Si2177) | DVBv5 CNR | **DVBv5 dBm** | 없음(DVBv3는 0xFFFFFFFF 고정, v5 미제공) |
+
+`GET /api/devices`로 시스템의 모든 프론트엔드와 모드별 선택 결과를 볼 수 있습니다.
+BER을 주지 않는 카드에서는 TSDuck 분석의 **TEI(전송 오류 표시) 패킷 수와 비율**을 함께 봅니다.
 
 ### 이전 lock 채널만 스캔
 - 자동 스캔 옆의 **이전 lock 채널만**을 켜면, 채널별 RF 로그나 저장된 채널 목록에 한 번이라도 lock 기록이 있는 채널만 스캔합니다

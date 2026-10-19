@@ -28,6 +28,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import dvbdev
 import monitor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -242,62 +243,62 @@ class ReceptionLog:
 
 
 # ---------------------------------------------------------------------------
-# DVB frontend (DVBv3 read ioctls, x86_64/arm64 encoding)
+# DVB device selection (statistics reader: dvbdev.py)
 
-def _ior(nr, size):
-    return (2 << 30) | (size << 16) | (ord('o') << 8) | nr
-
-FE_READ_STATUS = _ior(69, 4)
-FE_READ_BER = _ior(70, 4)
-FE_READ_SIGNAL_STRENGTH = _ior(71, 2)
-FE_READ_SNR = _ior(72, 2)
-FE_READ_UNCORRECTED_BLOCKS = _ior(73, 4)
-
-FE_BITS = [(0x01, 'SIGNAL'), (0x02, 'CARRIER'), (0x04, 'VITERBI'),
-           (0x08, 'SYNC'), (0x10, 'LOCK')]
+BASE_MODES = json.loads(json.dumps(MODES))
+_MODES_SIG = None
 
 
-class Frontend:
-    def __init__(self, adapter):
-        self.path = f'/dev/dvb/adapter{adapter}/frontend0'
-        self.fd = None
+def sync_modes(cfg):
+    """Apply config.json "modes" overrides (delivery / modulations / label) to MODES in place."""
+    global _MODES_SIG
+    ov = cfg.get('modes') or {}
+    sig = json.dumps(ov, sort_keys=True)
+    if sig == _MODES_SIG:
+        return
+    _MODES_SIG = sig
+    for k, base in BASE_MODES.items():
+        m = dict(base)
+        o = ov.get(k) or {}
+        if o.get('delivery') in dvbdev.TSDUCK_DELSYS:
+            m['delivery'] = o['delivery']
+        if isinstance(o.get('modulations'), list) and o['modulations']:
+            m['modulations'] = [str(x) for x in o['modulations']]
+        if o.get('label'):
+            m['label'] = str(o['label'])
+        MODES[k] = m
 
-    def open(self):
-        # read-only open is allowed while tsp holds the frontend read/write
-        self.fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
 
-    def close(self):
-        if self.fd is not None:
-            os.close(self.fd)
-            self.fd = None
+def device_key(dev):
+    """Identity of the card a measurement was made with (baselines are kept per card)."""
+    if not dev:
+        return None
+    return f"{dev.get('usb_id') or '?'}|{dev.get('name') or '?'}"
 
-    def _rd(self, req, fmt):
-        buf = bytearray(struct.calcsize(fmt))
-        try:
-            fcntl.ioctl(self.fd, req, buf)
-        except OSError:
-            return None
-        return struct.unpack(fmt, buf)[0]
 
-    def read(self):
-        st = self._rd(FE_READ_STATUS, 'I')
-        snr = self._rd(FE_READ_SNR, 'H')
-        strength = self._rd(FE_READ_SIGNAL_STRENGTH, 'H')
-        ucb = self._rd(FE_READ_UNCORRECTED_BLOCKS, 'I')
-        ber = self._rd(FE_READ_BER, 'I')
-        st = st or 0
-        return {
-            't': time.time(),
-            'status': st,
-            'bits': [name for bit, name in FE_BITS if st & bit],
-            'locked': bool(st & 0x10),
-            # lgdt3305: snr in 0.1 dB, strength = SNR scaled 0..35 dB -> 0..65535
-            'snr_db': None if snr is None else round(snr / 10.0, 1),
-            'strength_pct': None if strength is None else round(strength * 100 / 65535, 1),
-            'ucb': ucb,
-            # lgdt3305 does not implement BER (always 0)
-            'ber': ber,
-        }
+_DEV_CACHE = {}
+
+
+def pick_device(cfg, delivery):
+    """Frontend for `delivery` per config.json "adapter"/"frontend" ("auto" or a number); cached 10 s."""
+    key = (str(cfg.get('adapter', 'auto')), str(cfg.get('frontend', 'auto')), delivery)
+    c = _DEV_CACHE.get(key)
+    if c and time.time() - c[0] < 10:
+        return c[1]
+    dev = dvbdev.select(cfg.get('adapter', 'auto'), cfg.get('frontend', 'auto'), delivery)
+    _DEV_CACHE[key] = (time.time(), dev)
+    return dev
+
+
+def device_info(cfg, delivery='ATSC'):
+    dev = pick_device(cfg, delivery)
+    label = cfg.get('device_label', '')
+    if not dev:
+        return {'name': label or '수신기 없음', 'present': False}
+    return {'present': True, 'name': label or dev.get('usb') or dev.get('name'), 'frontend': dev.get('name'),
+            'path': f"/dev/dvb/adapter{dev['adapter']}/frontend{dev['frontend']}", 'usb_id': dev.get('usb_id'),
+            'freq_min_mhz': dev.get('freq_min_mhz'), 'freq_max_mhz': dev.get('freq_max_mhz'),
+            'delsys': dev.get('delsys'), 'key': device_key(dev)}
 
 
 # ---------------------------------------------------------------------------
@@ -470,8 +471,9 @@ class Psip:
 
 class Session:
     def __init__(self, adapter, mode, channel, freq_mhz, modulation, on_done,
-                 signal_timeout=6, source='manual', capture=True, freeze=None):
+                 signal_timeout=6, source='manual', capture=True, freeze=None, device=None):
         self.adapter = adapter
+        self.device = device or {'adapter': adapter, 'frontend': 0, 'name': ''}
         self.freeze_cfg = freeze            # dict from config.json "freeze" -> analyse video (auto scans)
         self.freeze_path = None
         self.signal_timeout = signal_timeout
@@ -511,7 +513,7 @@ class Session:
         delivery = MODES[self.mode]['delivery']
         return [
             'tsp', '--realtime',
-            '-I', 'dvb', '--adapter', str(self.adapter),
+            '-I', 'dvb', '--device-name', dvbdev.tsp_device(self.device),
             '--delivery-system', delivery,
             '--frequency', str(int(self.freq_mhz * 1_000_000)),
             '--modulation', self.modulation,
@@ -570,7 +572,10 @@ class Session:
     def log_entry(self):
         # the demod reports 0 dB right after lock until its MSE is valid: ignore those samples
         locked = [h['snr'] for h in self.fe_hist if h.get('lock') and h.get('snr')]
+        rfs = [h['rf'] for h in self.fe_hist if h.get('lock') and h.get('rf') is not None]
+        bers = [h['ber'] for h in self.fe_hist if h.get('lock') and h.get('ber') is not None]
         fe = self.fe or {}
+        dev = self.device
         a = (self.analyze or {}).get('ts') or {}
         m = self.psip.model()
         vct = (m.get('vct') or {}).get('channels', [])
@@ -593,7 +598,12 @@ class Session:
             'tsid': (m.get('vct') or {}).get('tsid') or (m.get('pat') or {}).get('tsid'),
             'virtual_channels': [f"{c['virtual']} {c['short_name']}" for c in vct],
             'capture': self.capture_name if self.captured() else None,
-            'ber': self.error_rates()['ber'],
+            'ber': (sum(bers) / len(bers)) if bers else self.error_rates()['ber'],
+            'ber_src': fe.get('ber_src') if bers else ('tsduck' if self.error_rates()['ber'] is not None else None),
+            'rf_dbm_avg': round(sum(rfs) / len(rfs), 1) if rfs else None,
+            'rf_dbm_min': min(rfs) if rfs else None,
+            'snr_src': fe.get('snr_src'),
+            'device': device_key(dev),
             'tei': self.error_rates()['tei'],
             'per': None if self.error_rates()['per'] is None else round(self.error_rates()['per'], 6),
             'freeze': self.freeze_result() if self.locked_at else None,
@@ -678,7 +688,7 @@ class Session:
         self.on_done(self)
 
     def _poll_fe(self):
-        fe = Frontend(self.adapter)
+        fe = dvbdev.Frontend(self.device['adapter'], self.device['frontend'], self.device.get('name', ''))
         # wait until tsp has opened/tuned the frontend
         time.sleep(0.5)
         try:
@@ -699,9 +709,10 @@ class Session:
                         r['ucb_delta'] = d
                     self.ucb_prev = (r['t'], r['ucb'])
                 r['ucb_rate'] = self.ucb_rate
+                r['strength_pct'] = r.get('quality_pct')        # UI / log field name kept
                 self.fe = r
-                self.fe_hist.append({'t': round(r['t'] - self.started, 1),
-                                     'snr': r['snr_db'], 'lock': r['locked']})
+                self.fe_hist.append({'t': round(r['t'] - self.started, 1), 'snr': r['snr_db'], 'lock': r['locked'],
+                                     'rf': r.get('signal_dbm'), 'ber': r.get('ber')})
                 time.sleep(1.0)
         finally:
             fe.close()
@@ -820,7 +831,7 @@ EXPORT_COLUMNS = [
     ('mode', '모드'), ('channel', '채널'), ('freq_mhz', '주파수(MHz)'), ('modulation', '변조'),
     ('result', '결과'), ('lock_time_s', 'lock 시간(s)'), ('snr_avg', 'SNR 평균(dB)'), ('snr_min', 'SNR 최소(dB)'),
     ('snr_last', 'SNR 마지막(dB)'), ('strength_pct', '신호 품질(%)'), ('ucb', 'UCB'), ('bitrate', '비트레이트(bps)'),
-    ('packets', '패킷 수'), ('tei', 'TEI 패킷'), ('ber', 'BER'), ('tsid', 'TSID'), ('virtual_channels', '가상채널'),
+    ('rf_dbm_avg', 'RF 레벨(dBm)'), ('packets', '패킷 수'), ('tei', 'TEI 패킷'), ('ber', 'BER'), ('tsid', 'TSID'), ('virtual_channels', '가상채널'),
     ('freeze', '영상 정지(s)'), ('capture', '캡처'),
     ('time', '측정 시각'), ('duration_s', '측정 시간(s)'), ('source', '구분'),
 ]
@@ -935,7 +946,8 @@ class Controller:
         e = s.log_entry()
         a = self.config.get()['alerts']
         e['scan_id'] = s.scan_id
-        e['baseline'] = self.history.baseline(s.mode, s.channel, a['baseline_count'], a['min_baseline'])
+        e['baseline'] = self.history.baseline(s.mode, s.channel, a['baseline_count'], a['min_baseline'],
+                                              device=e.get('device'))
         try:
             self.history.append(e)
         except OSError as err:
@@ -957,9 +969,11 @@ class Controller:
             if self.session:
                 self.session.stop()
             self.suppress.discard(f'{mode}:{channel}')
+            cfg = self.config.get()
             if PREVIEW['enabled']:
-                PREVIEW['encoder'] = select_encoder(bool(self.config.get().get('nvidia', True)))
-            s = Session(self.adapter, mode, channel, freq_mhz, modulation, self._done, **kw)
+                PREVIEW['encoder'] = select_encoder(bool(cfg.get('nvidia', True)))
+            dev = pick_device(cfg, MODES[mode]['delivery'])
+            s = Session(self.adapter, mode, channel, freq_mhz, modulation, self._done, device=dev, **kw)
             self.session = s
             s.start()
             return s
@@ -1131,11 +1145,12 @@ class Controller:
 
     def run_scheduled(self, sched, reason='schedule'):
         """Called by the scheduler worker; blocks until the scan is finished."""
+        sync_modes(self.config.get())
         t0 = time.time()
         while self.scan and self.scan.get('running') and time.time() - t0 < 4 * 3600:
             time.sleep(5)                             # let a running scan finish first
         lo, hi = sched.get('from'), sched.get('to')
-        chans = self.filter_channels(sched['mode'], lo, hi, bool(sched.get('only_locked')))
+        chans, skipped = self.filter_channels(sched['mode'], lo, hi, bool(sched.get('only_locked')), with_skipped=True)
         if not chans:
             self.schedules.update(sched['id'], last_run=time.strftime('%Y-%m-%d %H:%M:%S'),
                                   last_result='스캔할 채널 없음' + (' (이전 lock 채널 없음)' if sched.get('only_locked') else ''))
@@ -1144,6 +1159,7 @@ class Controller:
         self.start_scan(sched['mode'], int(sched.get('timeout') or 4), chans, source='schedule', schedule=sched,
                         only_locked=bool(sched.get('only_locked')))
         sc = self.scan
+        sc['skipped'] = skipped
         self.schedules.update(sched['id'], last_run=time.strftime('%Y-%m-%d %H:%M:%S'), last_scan_id=sc['id'],
                               last_result='실행 중')
         th = self._scan_thread
@@ -1160,14 +1176,20 @@ class Controller:
         chans |= {r['channel'] for r in self.saved.snapshot().values() if r['mode'] == mode}
         return chans
 
-    def filter_channels(self, mode, lo=None, hi=None, only_locked=False):
+    def filter_channels(self, mode, lo=None, hi=None, only_locked=False, with_skipped=False):
         with open(CHANNEL_FILE, encoding='utf-8') as f:
             chans = json.load(f).get(mode, [])
         chans = [c for c in chans if (lo is None or c['channel'] >= lo) and (hi is None or c['channel'] <= hi)]
         if only_locked:
             ok = self.locked_channels(mode)
             chans = [c for c in chans if c['channel'] in ok]
-        return chans
+        # frequencies the current card cannot tune (e.g. 861 MHz on a 858 MHz frontend) are left out
+        dev = pick_device(self.config.get(), MODES[mode]['delivery']) or {}
+        fmin, fmax = dev.get('freq_min_mhz'), dev.get('freq_max_mhz')
+        ok_rng = lambda f: (not fmin or f >= fmin) and (not fmax or f <= fmax)
+        skipped = [c['channel'] for c in chans if not ok_rng(c['center_frequency_mhz'])]
+        chans = [c for c in chans if ok_rng(c['center_frequency_mhz'])]
+        return (chans, skipped) if with_skipped else chans
 
     def history_summary(self, mode):
         a = self.config.get()['alerts']
@@ -1182,12 +1204,14 @@ class Controller:
             locked = [x for x in items if x.get('result') == 'locked']
             if not locked:
                 continue                              # never received: not a monitored channel
-            base = self.history.baseline(mode, ch, a['baseline_count'], a['min_baseline'])
+            base = self.history.baseline(mode, ch, a['baseline_count'], a['min_baseline'],
+                                         device=device_info(self.config.get(), MODES[mode]['delivery']).get('key'))
             spark = [x.get('snr_avg') if x.get('result') == 'locked' else None for x in items[-30:]]
             out.append({'channel': ch, 'freq_mhz': plan.get(ch, last.get('freq_mhz')),
                         'virtual_channels': (locked[-1].get('virtual_channels') or []),
                         'count': len(items), 'locked_count': len(locked),
-                        'last': {k: last.get(k) for k in ('time', 'result', 'snr_avg', 'strength_pct', 'ucb', 'source')}
+                        'last': {k: last.get(k) for k in ('time', 'result', 'snr_avg', 'strength_pct', 'ucb', 'source',
+                                                          'rf_dbm_avg', 'ber', 'device')}
                                 | {'frozen': bool((last.get('freeze') or {}).get('frozen'))},
                         'baseline': base, 'spark': spark,
                         'alerts': [{k: x[k] for k in ('kind', 'severity', 'message')}
@@ -1263,6 +1287,7 @@ class Handler(SimpleHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        sync_modes(self.ctl.config.get())
         path = urlparse(self.path).path
         if path in ('/', '/index.html'):
             return self._index()
@@ -1277,10 +1302,17 @@ class Handler(SimpleHTTPRequestHandler):
                                'scan': self.ctl.scan, 'scan_timeout_range': SCAN_TIMEOUT_RANGE,
                                'monitor': {'alerts': self.ctl.alerts.counts(),
                                            'scheduler': self.ctl.scheduler.state(),
-                                           'title': self.ctl.config.get()['title']},
+                                           'title': self.ctl.config.get()['title'],
+                                           'device': device_info(self.ctl.config.get(),
+                                                                 MODES[(s.mode if s else 'terrestrial')]['delivery'])},
                                'server_time': time.time()})
         q = parse_qs(urlparse(self.path).query)
         qv = lambda k, d=None: (q.get(k) or [d])[0]
+        if path == '/api/devices':
+            cfg = self.ctl.config.get()
+            return self._json({'devices': dvbdev.list_devices(),
+                               'selected': {m: device_info(cfg, v['delivery']) for m, v in MODES.items()},
+                               'config': {k: cfg.get(k, 'auto') for k in ('adapter', 'frontend')}})
         if path == '/api/monitor':
             return self._json({'config': self.ctl.config.public(), 'alerts': self.ctl.alerts.counts(),
                                'scheduler': self.ctl.scheduler.state(), 'telegram_last': self.ctl.telegram.last})
@@ -1306,6 +1338,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({'error': 'bad mode'}, HTTPStatus.BAD_REQUEST)
             since = None if days <= 0 else time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time() - days * 86400))
             keep = ('time', 'source', 'result', 'snr_avg', 'snr_min', 'snr_last', 'strength_pct', 'ucb', 'bitrate',
+                    'rf_dbm_avg', 'rf_dbm_min', 'ber', 'ber_src', 'device',
                     'tsid', 'virtual_channels', 'capture', 'baseline', 'scan_id', 'lock_time_s', 'freeze', 'tei', 'ber')
             items = [{k: e.get(k) for k in keep} for e in self.ctl.history.read(mode, ch, since)]
             return self._json({'mode': mode, 'channel': ch, 'entries': items})
@@ -1384,6 +1417,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self._json({'error': 'format must be csv, json or zip'}, HTTPStatus.BAD_REQUEST)
 
     def do_POST(self):
+        sync_modes(self.ctl.config.get())
         path = urlparse(self.path).path
         b = self._body()
         if path == '/api/tune':
@@ -1420,11 +1454,12 @@ class Handler(SimpleHTTPRequestHandler):
             except (TypeError, ValueError):
                 return self._json({'error': 'bad from/to'}, HTTPStatus.BAD_REQUEST)
             only = bool(b.get('only_locked'))
-            chans = self.ctl.filter_channels(mode, lo_ch, hi_ch, only)
+            chans, skipped = self.ctl.filter_channels(mode, lo_ch, hi_ch, only, with_skipped=True)
             if not chans:
                 return self._json({'error': '스캔할 채널이 없습니다' + (' (이 범위에 이전에 lock된 채널 없음)' if only else '')},
                                   HTTPStatus.BAD_REQUEST)
             self.ctl.start_scan(mode, timeout, chans, only_locked=only)
+            self.ctl.scan['skipped'] = skipped
             return self._json({'ok': True, 'scan': self.ctl.scan})
         if path == '/api/alerts/ack':
             return self._json({'ok': True, 'acked': self.ctl.alerts.ack(None if b.get('all') else b.get('id'))})

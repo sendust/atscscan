@@ -292,3 +292,6 @@ table.t tr.frozen td:first-child { box-shadow: inset 4px 0 0 #79c0ff; }
 .ch .fzm { position: absolute; top: 5px; right: 20px; color: #79c0ff; font-size: 12px; }
 .chart .ev-fz { fill: #79c0ff; font: 700 12px var(--mono); }
 .scan-ctl label.chk { display: inline-flex; gap: 4px; align-items: center; }
+
+.chart .devchg { stroke: #d2a8ff; stroke-width: 1.5; stroke-dasharray: 4 3; }
+.chart .devchg-lab { fill: #d2a8ff; }
