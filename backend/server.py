@@ -197,35 +197,10 @@ def parse_freeze(path, fz):
 
 def capture_cmd(path):
     """Decode only key frames and save the first one (1920x1080, deinterlaced) as JPEG."""
-    # level+info: the input stream line gives the real frame rate (see video_rate_from_ffmpeg);
-    # the other [info] lines are dropped by Session._read_tsp.
-    v = ['ffmpeg', '-hide_banner', '-nostats', '-loglevel', 'level+info', '-skip_frame', 'nokey',
+    v = ['ffmpeg', '-hide_banner', '-nostats', '-loglevel', 'error', '-skip_frame', 'nokey',
          '-f', 'mpegts', '-probesize', '5000000', '-analyzeduration', '3000000', '-i', 'pipe:0',
          '-map', '0:v:0', '-vf', 'yadif=0', '-frames:v', '1', '-update', '1', '-q:v', '3', '-y', path]
     return ' '.join(shlex.quote(x) for x in v)
-
-
-_FFMPEG_INFO = re.compile(r'\[(info|verbose|debug)\] ')
-_FFMPEG_LEVEL = re.compile(r'\[(error|warning|fatal|panic)\] ')
-_FFMPEG_VIDEO = re.compile(r'Stream #\d+:\d+\[0x([0-9a-fA-F]+)\]: Video: (\w+).*?, ([\d.]+) fps')
-
-
-def video_rate_from_ffmpeg(line):
-    """'Stream #0:0[0x11]: Video: mpeg2video ..., 29.97 fps, ...' -> (0x11, '29.97')."""
-    m = _FFMPEG_VIDEO.search(line)
-    return (int(m.group(1), 16), m.group(3)) if m else None
-
-
-def fix_video_description(desc, fps):
-    """TSDuck 3.44 and older label every MPEG-2 video '@25 Hz' whatever its frame_rate_code
-    (checked with 23.976/25/29.97/30/59.94 test streams; fixed in 3.45-4798), so use the rate ffmpeg decoded."""
-    if not desc:
-        return desc
-    if fps:
-        return re.sub(r'@[\d.,]+ Hz', '@%s Hz' % fps, desc)
-    if desc.startswith('MPEG-2 Video'):
-        return re.sub(r', @[\d.,]+ Hz', '', desc)
-    return desc
 
 
 class ReceptionLog:
@@ -529,7 +504,6 @@ class Session:
         self.ucb_rate = None
         self.dvbstatus = None
         self.analyze = None
-        self.video_fps = {}         # PID -> frame rate from the capture ffmpeg
         self.psip = Psip()
         self.proc = None
         self.stopping = False
@@ -689,12 +663,6 @@ class Session:
                             self.message = 'Lock — TS 분석 중'
                     break
             else:
-                if _FFMPEG_INFO.search(line):
-                    r = video_rate_from_ffmpeg(line)
-                    if r:
-                        self.video_fps[r[0]] = r[1]
-                    continue
-                line = _FFMPEG_LEVEL.sub('', line, count=1)
                 if line.strip():
                     is_tsp = line.startswith('* ')
                     self.log.append(line if is_tsp or line.startswith('$') else '[ffmpeg] ' + line)
@@ -774,9 +742,7 @@ class Session:
                 'services': [{'id': s.get('id'), 'name': s.get('name'), 'provider': s.get('provider'),
                               'bitrate': s.get('bitrate'), 'pmt_pid': s.get('pmt-pid'),
                               'pcr_pid': s.get('pcr-pid'), 'pids': s.get('pids')} for s in svc],
-                'pids': [{'pid': p.get('id'),
-                          'description': fix_video_description(p.get('description'),
-                                                               self.video_fps.get(p.get('id'))),
+                'pids': [{'pid': p.get('id'), 'description': p.get('description'),
                           'bitrate': p.get('bitrate'),
                           'packets': (p.get('packets') or {}).get('total'),
                           'discontinuities': (p.get('packets') or {}).get('discontinuities'),

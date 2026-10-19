@@ -57,13 +57,12 @@ tsp --realtime \
   lgdt3305처럼 DVBv3만 있는 드라이버면 비어 있습니다 → 02 스킬로 직접 읽음.
 - `tsscan`의 korea 지역에는 UHF 정의가 없는 버전이 있습니다. 한국 지상파는 미국과 같은 6 MHz 채널표라 `--usa` 사용.
 
-## TSDuck의 MPEG-2 프레임 레이트 표시 오류
+## TSDuck의 MPEG-2 프레임 레이트 표시 오류 (3.44 이하)
 TSDuck 3.44의 `analyze`와 `pes --video-attributes`는 MPEG-2 비디오를 frame_rate_code와 관계없이 항상
 `1920x1080i, @25 Hz`로 표시합니다(23.976/25/29.97/30/59.94 fps 시험 스트림이 모두 25 Hz로 나옴. 해상도·비트레이트는 정상).
-같은 TS를 받는 캡처용 ffmpeg를 `-loglevel level+info`로 돌려 입력 스트림 줄
-`Stream #0:0[0x11]: Video: mpeg2video ..., 29.97 fps`에서 PID별 프레임 레이트를 얻고, 그 값으로 설명을 고칩니다.
-`[info]` 줄은 로그에서 빼고, `[error]`/`[warning]` 표시만 떼어 로그에 남깁니다.
+**3.45-4798에서 고쳐졌습니다**(같은 시험 스트림이 23.97/25/29.97/30/59.94 Hz로 나옴). 이 프로그램은 TSDuck 값을 그대로 보여주므로 3.45 이상을 씁니다.
 
-**TSDuck 3.45-4798에서 고쳐졌습니다.** 같은 시험 스트림이 23.97/25/29.97/30/59.94 Hz로 나오고, 실제 수신(29.97)도 맞게 나옵니다.
-새 버전을 설치하기 전에 deb를 `dpkg-deb -x`로 풀어 `LD_LIBRARY_PATH=<x>/usr/lib TSPLUGINS_PATH=<x>/usr/lib/tsduck <x>/usr/bin/tsp`로
-돌려 보면 설치된 버전을 건드리지 않고 비교할 수 있습니다(strace로 새 라이브러리·플러그인을 여는지 확인).
+- 값이 의심스러우면 같은 TS를 ffmpeg로 확인: `Stream #0:0[0x11]: Video: mpeg2video ..., 29.97 fps`.
+- 시험 스트림 만들기: `ffmpeg -f lavfi -i testsrc2=s=1920x1080:r=30000/1001 -t 2 -c:v mpeg2video -flags +ilme+ildct -f mpegts t.ts`
+- 새 버전을 설치하기 전에 deb를 `dpkg-deb -x`로 풀어 `LD_LIBRARY_PATH=<x>/usr/lib TSPLUGINS_PATH=<x>/usr/lib/tsduck <x>/usr/bin/tsp`로
+  돌려 보면 설치된 버전을 건드리지 않고 비교할 수 있습니다(strace로 새 라이브러리·플러그인을 여는지 확인).
