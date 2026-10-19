@@ -79,7 +79,9 @@ select { background: var(--panel); color: var(--text); border: 1px solid var(--l
 @keyframes pulse { 50% { opacity: .2; } }
 
 /* detail */
-.detail { margin-top: 18px; scroll-margin-top: 64px; }
+.detail { margin-top: 18px; }
+/* sticky header height is measured in app.js (it wraps to 2+ lines on narrower screens) */
+.detail, .mon { scroll-margin-top: calc(var(--top-h, 64px) + 12px); }
 .detail-head {
   display: flex; justify-content: space-between; align-items: center;
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px 10px 0 0;

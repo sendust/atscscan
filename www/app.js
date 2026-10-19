@@ -600,4 +600,13 @@ async function init() {
   poll();
 }
 
+// keep panels opened with scrollIntoView clear of the sticky header
+function trackHeaderHeight() {
+  const top = document.querySelector('.top');
+  const set = () => document.documentElement.style.setProperty('--top-h', top.offsetHeight + 'px');
+  set();
+  if (window.ResizeObserver) new ResizeObserver(set).observe(top);
+}
+
+trackHeaderHeight();
 init();
