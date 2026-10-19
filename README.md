@@ -1,9 +1,22 @@
 # SBS 헤드엔드 모니터 시스템 (atscscan)
 
-SBS 본사에 설치된 RF 헤드엔드 모듈레이터들의 출력과 동작 상태를 매일 모니터링하는 시스템입니다.
+SBS 목동 사내공청시스템은 ATSC 모듈레이터로 70개가 넘는 채널을 운용하고 있으며, 유지보수는 방송기기 정비실이 담당합니다.
+이 시스템은 그 헤드엔드 모듈레이터들의 출력과 동작 상태를 매일 모니터링합니다.
 리눅스 DVB ATSC 수신기(Skydigital SKYTV HD USB mini, Hauppauge WinTV-HVR-975 등)로 각 채널을 튜닝해
 수신 레벨(SNR, RF 레벨, 신호 품질, BER/UCB)과 PSIP를 확인합니다.
 정해진 시각에 자동 스캔하고, 채널별 이력과 비교해 수신 값이 크게 떨어지거나 영상이 멈추면 화면과 텔레그램으로 알립니다.
+
+### 화면
+
+그림을 누르면 원본 크기로 볼 수 있습니다.
+
+<table>
+  <tr>
+    <td align="center" valign="top"><a href="docs/images/ui1.png"><img src="docs/images/thumb/ui1.jpg" width="260" alt="자동 스캔 결과와 실시간 미리보기"></a><br><sub>자동 스캔 결과 · 채널 버튼 · WebRTC 미리보기 · 프론트엔드 상태</sub></td>
+    <td align="center" valign="top"><a href="docs/images/ui2.png"><img src="docs/images/thumb/ui2.jpg" width="260" alt="EIT 편성표"></a><br><sub>PSIP EIT(편성표) 탭</sub></td>
+    <td align="center" valign="top"><a href="docs/images/ui3.png"><img src="docs/images/thumb/ui3.jpg" width="260" alt="TS 분석"></a><br><sub>TS 분석 탭 (서비스 · PID별 비트레이트)</sub></td>
+  </tr>
+</table>
 
 ![RF 수신 추이](docs/images/rf-trend.png)
 
