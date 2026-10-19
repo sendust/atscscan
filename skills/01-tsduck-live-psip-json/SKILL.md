@@ -63,3 +63,7 @@ TSDuck 3.44의 `analyze`와 `pes --video-attributes`는 MPEG-2 비디오를 fram
 같은 TS를 받는 캡처용 ffmpeg를 `-loglevel level+info`로 돌려 입력 스트림 줄
 `Stream #0:0[0x11]: Video: mpeg2video ..., 29.97 fps`에서 PID별 프레임 레이트를 얻고, 그 값으로 설명을 고칩니다.
 `[info]` 줄은 로그에서 빼고, `[error]`/`[warning]` 표시만 떼어 로그에 남깁니다.
+
+**TSDuck 3.45-4798에서 고쳐졌습니다.** 같은 시험 스트림이 23.97/25/29.97/30/59.94 Hz로 나오고, 실제 수신(29.97)도 맞게 나옵니다.
+새 버전을 설치하기 전에 deb를 `dpkg-deb -x`로 풀어 `LD_LIBRARY_PATH=<x>/usr/lib TSPLUGINS_PATH=<x>/usr/lib/tsduck <x>/usr/bin/tsp`로
+돌려 보면 설치된 버전을 건드리지 않고 비교할 수 있습니다(strace로 새 라이브러리·플러그인을 여는지 확인).

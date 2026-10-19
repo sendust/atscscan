@@ -217,8 +217,8 @@ def video_rate_from_ffmpeg(line):
 
 
 def fix_video_description(desc, fps):
-    """TSDuck 3.44 labels every MPEG-2 video '@25 Hz' whatever its frame_rate_code
-    (checked with 23.976/25/29.97/30/59.94 test streams), so use the rate ffmpeg decoded."""
+    """TSDuck 3.44 and older label every MPEG-2 video '@25 Hz' whatever its frame_rate_code
+    (checked with 23.976/25/29.97/30/59.94 test streams; fixed in 3.45-4798), so use the rate ffmpeg decoded."""
     if not desc:
         return desc
     if fps:
