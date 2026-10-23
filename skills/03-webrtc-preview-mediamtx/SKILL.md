@@ -41,6 +41,12 @@ ffmpeg -i pipe:0 -map 0:v:0 -map '0:a:0?'   # 첫 번째 영상/음성 = 첫 번
     H.264에 GBR로 표시되어 재생기가 RGB로 해석함 → `setparams`로 지움.
   - 디코딩·디인터레이스 자체는 정상. 깨짐 여부는 반드시 프레임을 뽑아 **눈으로** 확인(통과 여부·프레임 레이트만으로는 모름).
   - 검은 화면 채널로 확인하지 말 것: 같은 세션의 CPU 캡처(JPEG)와 나란히 비교.
+- 근본 해결은 ffmpeg 재빌드: `INVALID_PTX`는 CUDA 필터 PTX의 `.target`(예: `sm_60`)이 GPU보다 높아서입니다
+  (`grep '^\.target' libavfilter/vf_yadif_cuda.ptx`). configure의 nvcc 기본값은 sm_30 → 안 되면 sm_60 → sm_75로 넘어갑니다.
+  `--nvccflags="-gencode arch=compute_52,code=sm_52 -O2"`로 다시 configure하고 **기존 `.ptx*` 파일을 지운 뒤** make
+  (make는 .cu가 바뀔 때만 .ptx를 다시 만듦 — 지우지 않으면 sm_60 그대로 링크됨).
+  설치 전에 CUDA 드라이버 API `cuModuleLoadData`로 PTX를 직접 올려 보면 빌드 없이 확인할 수 있습니다(실패 코드 218 = INVALID_PTX).
+  CUDA 13은 Maxwell·Pascal·Volta 대상 컴파일을 지원하지 않으므로 CUDA 12.x 필요. 드라이버 580이 Maxwell 지원 마지막 계열.
 - CPU 인코더는 libx264 → libopenh264 → libvpx(VP8) 순으로 실제 실행해 보고 고릅니다(빌드에 없는 경우가 있음).
 
 ## mediamtx

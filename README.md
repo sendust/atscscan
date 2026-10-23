@@ -182,6 +182,16 @@ crontab과 같은 5필드 형식(`분 시 일 월 요일`)으로 자동 스캔�
      `CUDA_ERROR_INVALID_PTX`로 실패합니다. NVENC 자체는 동작합니다. ffmpeg CPU 약 47%(CPU 경로는 약 180%).
      이 GPU에서는 NVDEC의 `-resize`가 화면을 깨뜨리므로 쓰지 않고, NVDEC 출력의 잘못된 색 정보(`gbr`)는 `setparams`로 지웁니다.
   3. 둘 다 안 되면 로그에 남기고 자동으로 CPU 경로로 바꿉니다.
+
+  구형 GPU에서 1번을 쓰려면 ffmpeg를 그 GPU에 맞게 다시 빌드합니다. configure는 CUDA 12에서 기본값(sm_30)이 안 되면
+  sm_60으로 넘어가므로 Maxwell(sm_52)에서는 CUDA 필터가 돌지 않습니다.
+  ```sh
+  ./configure <기존 옵션> --nvccflags="-gencode arch=compute_52,code=sm_52 -O2"
+  rm -f libavfilter/*.ptx*  libavfilter/*/*.ptx*   # make는 플래그가 바뀌어도 .ptx를 다시 만들지 않음
+  make -j8 && sudo make install
+  ```
+  sm_52 코드는 더 새로운 GPU에서도 돌아갑니다. CUDA 13은 Maxwell을 컴파일하지 못하므로 CUDA 12.x로 빌드합니다.
+  Quadro M4000에서 다시 빌드한 뒤 1번 경로: ffmpeg CPU 약 11%, GPU 인코더 3%·디코더 9%.
   GPU를 바꾸면 백엔드를 재시작해야 다시 시험합니다.
 - `false`: CUDA·NVENC를 전혀 쓰지 않습니다. 소프트웨어 디코딩 + `bwdif` + 960×540 + `libx264 ultrafast`
   (libx264가 없으면 libopenh264, 그것도 없으면 VP8 `libvpx`). i7-6700K 기준 약 190% CPU(코어 2개 정도).
