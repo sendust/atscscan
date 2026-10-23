@@ -26,10 +26,21 @@ ffmpeg -i pipe:0 -map 0:v:0 -map '0:a:0?'   # 첫 번째 영상/음성 = 첫 번
 | 경로 | 명령 핵심 | 부하 (i7-6700K, 1080i MPEG-2) |
 |---|---|---|
 | GPU | `-hwaccel cuda -hwaccel_output_format cuda` + `yadif_cuda=0,scale_cuda=1280:720` + `h264_nvenc -preset p4 -tune ll` | GPU 3~7%, ffmpeg CPU 약 11% |
+| GPU, CUDA 필터 불가 (`nvenc_nvdec`) | `-c:v mpeg2_cuvid -deint adaptive -drop_second_field 1` + `setparams=colorspace=unknown:…,scale=1280:720:flags=fast_bilinear` + `h264_nvenc` | ffmpeg CPU 약 47% (Quadro M4000) |
 | CPU | `bwdif=0,scale=960:540` + `libx264 -preset ultrafast -tune zerolatency` | 약 190% |
 | (처음 CPU 설정) | `yadif=0,scale=1280:720` + `veryfast` | 약 400% |
 
-- `true`여도 실제로 NVENC가 되는지 `ffmpeg -f lavfi -i color -c:v h264_nvenc -f null -`로 한 번 시험하고, 실패하면 CPU로.
+- `true`여도 **실제로 쓸 체인 전체**를 시험합니다. `-c:v h264_nvenc`만 시험하면 안 됩니다: GPU를 Quadro M4000(Maxwell,
+  compute 5.2)으로 바꾸자 NVENC 시험은 통과했는데 `yadif_cuda`/`scale_cuda`/`bwdif_cuda`가 모두
+  `CUDA_ERROR_INVALID_PTX`로 실패해 미리보기가 죽었습니다(ffmpeg 빌드의 CUDA 커널이 최신 GPU용).
+  - 1순위 시험: `-f lavfi -i color -vf format=nv12,hwupload_cuda,yadif_cuda=0,scale_cuda=160:120 -c:v h264_nvenc`
+  - 2순위: 짧은 MPEG-2 TS를 만들어 `mpeg2_cuvid -deint adaptive` → CPU 축소 → NVENC
+- NVDEC(`mpeg2_cuvid`)에서 겪은 것:
+  - `-resize`는 이 GPU에서 화면을 깨뜨림(이전 프레임 잔상·블록). x264로 인코딩해도 깨지므로 NVENC 문제가 아님 → CPU로 축소.
+  - 출력 프레임의 색 정보가 `colorspace=gbr`, `primaries/trc=reserved`로 나옴 → swscale이 거부하고, 그대로 인코딩하면
+    H.264에 GBR로 표시되어 재생기가 RGB로 해석함 → `setparams`로 지움.
+  - 디코딩·디인터레이스 자체는 정상. 깨짐 여부는 반드시 프레임을 뽑아 **눈으로** 확인(통과 여부·프레임 레이트만으로는 모름).
+  - 검은 화면 채널로 확인하지 말 것: 같은 세션의 CPU 캡처(JPEG)와 나란히 비교.
 - CPU 인코더는 libx264 → libopenh264 → libvpx(VP8) 순으로 실제 실행해 보고 고릅니다(빌드에 없는 경우가 있음).
 
 ## mediamtx

@@ -145,7 +145,7 @@ function renderPreview(s) {
   if (!live) { player.src = 'about:blank'; return; }
   const base = `${location.protocol}//${location.hostname}:${pv.webrtc_port}/${encodeURIComponent(pv.path)}/`;
   player.src = `${base}?controls=true&muted=true&autoplay=true&playsinline=true`;
-  const ENC = { nvenc: 'H.264 720p · GPU NVENC', x264: 'H.264 540p · CPU x264', openh264: 'H.264 540p · CPU OpenH264', vp8: 'VP8 540p · CPU libvpx' };
+  const ENC = { nvenc: 'H.264 720p · GPU NVENC', nvenc_nvdec: 'H.264 720p · GPU NVDEC + NVENC', x264: 'H.264 540p · CPU x264', openh264: 'H.264 540p · CPU OpenH264', vp8: 'VP8 540p · CPU libvpx' };
   $('#videoNote').innerHTML = `WebRTC 미리보기 · 첫 번째 서비스 · ${esc(ENC[pv.encoder] || pv.encoder)} + Opus · ` +
     `소리는 플레이어에서 음소거 해제 · <a href="${esc(base)}" target="_blank" rel="noopener">새 창으로 열기</a>`;
 }

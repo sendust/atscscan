@@ -175,8 +175,14 @@ crontab과 같은 5필드 형식(`분 시 일 월 요일`)으로 자동 스캔�
 - 경보 패널의 **텔레그램 테스트** 버튼으로 전송을 확인할 수 있고, 마지막 전송 결과(성공/실패 사유)가 표시됩니다.
 
 ### GPU 유무 (`"nvidia"`)
-- `true`: 실제로 NVENC가 동작하는지 확인한 뒤 CUDA 디코딩 + `yadif_cuda`/`scale_cuda` + `h264_nvenc`로 720p 미리보기.
-  NVENC를 쓸 수 없으면 로그에 남기고 자동으로 CPU로 바꿉니다.
+- `true`: 백엔드 시작 시 실제 GPU 경로를 시험해 보고 되는 것을 씁니다(화면 미리보기 아래에 표시).
+  1. `nvenc`: CUDA 디코딩 + `yadif_cuda`/`scale_cuda` + `h264_nvenc`, 720p.
+  2. `nvenc_nvdec`: CUDA 필터가 안 되는 GPU용. NVDEC(`mpeg2_cuvid`)로 디코딩·디인터레이스, CPU로 720p 축소, `h264_nvenc`.
+     ffmpeg 빌드의 CUDA 필터가 최신 GPU용으로만 컴파일돼 있으면 구형 GPU(예: Quadro M4000, Maxwell, compute 5.2)에서
+     `CUDA_ERROR_INVALID_PTX`로 실패합니다. NVENC 자체는 동작합니다. ffmpeg CPU 약 47%(CPU 경로는 약 180%).
+     이 GPU에서는 NVDEC의 `-resize`가 화면을 깨뜨리므로 쓰지 않고, NVDEC 출력의 잘못된 색 정보(`gbr`)는 `setparams`로 지웁니다.
+  3. 둘 다 안 되면 로그에 남기고 자동으로 CPU 경로로 바꿉니다.
+  GPU를 바꾸면 백엔드를 재시작해야 다시 시험합니다.
 - `false`: CUDA·NVENC를 전혀 쓰지 않습니다. 소프트웨어 디코딩 + `bwdif` + 960×540 + `libx264 ultrafast`
   (libx264가 없으면 libopenh264, 그것도 없으면 VP8 `libvpx`). i7-6700K 기준 약 190% CPU(코어 2개 정도).
 - 값을 바꾸면 다음 튜닝부터 적용됩니다(재시작 불필요). 화면 미리보기 아래에 현재 인코더가 표시됩니다.

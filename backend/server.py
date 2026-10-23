@@ -64,7 +64,7 @@ PREVIEW = {
     'rtsp': 'rtsp://127.0.0.1:8554',   # mediamtx RTSP (publish)
     'path': 'atscscan',                # mediamtx path
     'webrtc_port': 8889,               # mediamtx WebRTC/HTTP (browser player)
-    'encoder': None,                   # 'nvenc' | 'x264' | 'openh264' | 'vp8'  (chosen per session)
+    'encoder': None,                   # 'nvenc' | 'nvenc_nvdec' | 'x264' | 'openh264' | 'vp8'
 }
 
 _ENC_CACHE = {}
@@ -79,9 +79,34 @@ def _ffmpeg_ok(args):
         return False
 
 
-def select_encoder(nvidia):
-    """config.json "nvidia": true -> NVENC if it actually works; false (or NVENC unusable) -> CPU encoder.
+# NVDEC (mpeg2_cuvid) output carries bogus colour tags (colorspace gbr, primaries/trc reserved) that swscale
+# rejects -> reset them. Its -resize option corrupts the picture on the Quadro M4000 (driver 580), so scale on CPU.
+NVDEC_VF = ('setparams=colorspace=unknown:color_primaries=unknown:color_trc=unknown:range=tv,'
+            'scale=1280:720:flags=fast_bilinear')
 
+
+def _nvdec_ok():
+    """NVDEC MPEG-2 decode with hardware deinterlace/resize -> NVENC, on a short generated MPEG-2 TS."""
+    try:
+        ts = subprocess.run(['ffmpeg', '-hide_banner', '-v', 'error', '-f', 'lavfi', '-i',
+                             'testsrc2=s=720x480:r=30000/1001:d=0.5', '-c:v', 'mpeg2video', '-f', 'mpegts', '-'],
+                            capture_output=True, timeout=20).stdout
+        r = subprocess.run(['ffmpeg', '-hide_banner', '-v', 'error', '-c:v', 'mpeg2_cuvid', '-deint', 'adaptive',
+                            '-drop_second_field', '1', '-f', 'mpegts', '-i', 'pipe:0',
+                            '-vf', NVDEC_VF.replace('1280:720', '320:240'),
+                            '-c:v', 'h264_nvenc', '-f', 'null', '-'], input=ts, capture_output=True, timeout=20)
+        return bool(ts) and r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def select_encoder(nvidia):
+    """config.json "nvidia": true -> a GPU chain that actually works; false (or no GPU chain) -> CPU encoder.
+
+    GPU: 'nvenc' = CUDA decode + yadif_cuda/scale_cuda + NVENC. ffmpeg builds whose CUDA filter kernels
+    target newer GPUs fail on older ones (Quadro M4000, compute 5.2: CUDA_ERROR_INVALID_PTX) although
+    NVENC itself works -> 'nvenc_nvdec' = NVDEC (mpeg2_cuvid) decode/deinterlace + CPU scale + NVENC
+    (~47% CPU vs ~180% for the CPU path).
     CPU chain: libx264 -> libopenh264 (both H.264) -> libvpx (VP8). All are WebRTC-compatible in mediamtx.
     """
     key = 'nvidia' if nvidia else 'cpu'
@@ -89,8 +114,11 @@ def select_encoder(nvidia):
         return _ENC_CACHE[key]
     enc = None
     if nvidia:
-        if _ffmpeg_ok(['-c:v', 'h264_nvenc']):
+        if _ffmpeg_ok(['-vf', 'format=nv12,hwupload_cuda,yadif_cuda=0,scale_cuda=160:120', '-c:v', 'h264_nvenc']):
             enc = 'nvenc'
+        elif _nvdec_ok():
+            enc = 'nvenc_nvdec'
+            print('CUDA filters not usable on this GPU: using NVDEC decode/deinterlace + NVENC', flush=True)
         else:
             print('NVENC not usable although config.json "nvidia" is true: falling back to CPU', flush=True)
     if enc is None:
@@ -114,6 +142,12 @@ def ffmpeg_cmd(encoder=None):
         v += ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda', '-f', 'mpegts', '-i', 'pipe:0',
               '-map', '0:v:0', '-map', '0:a:0?',
               '-vf', 'yadif_cuda=0,scale_cuda=1280:720',
+              '-c:v', 'h264_nvenc', '-preset', 'p4', '-tune', 'll', '-profile:v', 'main',
+              '-bf', '0', '-g', '30', '-b:v', '3M', '-maxrate', '4M', '-bufsize', '2M']
+    elif enc == 'nvenc_nvdec':
+        # GPU without working CUDA filters: NVDEC decodes and deinterlaces MPEG-2 (ATSC 1.0 video), CPU scales
+        v += ['-c:v', 'mpeg2_cuvid', '-deint', 'adaptive', '-drop_second_field', '1',
+              '-f', 'mpegts', '-i', 'pipe:0', '-map', '0:v:0', '-map', '0:a:0?', '-vf', NVDEC_VF,
               '-c:v', 'h264_nvenc', '-preset', 'p4', '-tune', 'll', '-profile:v', 'main',
               '-bf', '0', '-g', '30', '-b:v', '3M', '-maxrate', '4M', '-bufsize', '2M']
     else:
